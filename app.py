@@ -22,6 +22,9 @@ class_labels = ['cataract', 'normal fundus', 'pathological myopia', 'moderate no
 model_path = os.getenv("MODEL_PATH", "Trained model final.h5")
 model_url = os.getenv("MODEL_URL", "https://drive.google.com/uc?id=1ZqfCi9Mi8ACxI3Gnkgdr6IJOn4LsaYgf")
 
+# Ensure the output directory exists
+os.makedirs(os.path.dirname(model_path) or '.', exist_ok=True)
+
 # Download model if it doesn't exist
 if not os.path.exists(model_path):
     logger.info("Downloading model file from Google Drive...")
