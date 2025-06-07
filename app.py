@@ -1,12 +1,15 @@
 import numpy as np
 import cv2
 from flask import Flask, request, jsonify
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import img_to_array
 from flask_cors import CORS
 import os
 import gdown
 import logging
+from tensorflow.lite.python.interpreter import Interpreter as tflite  # Corrected import for TFLite interpreter
+from tensorflow.keras.preprocessing.image import img_to_array
+
+# Set environment variable to disable oneDNN custom operations
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend compatibility
@@ -16,11 +19,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Define class labels based on the dataset
-class_labels = ['cataract', 'normal fundus', 'pathological myopia', 'moderate non proliferative retinopathy', 'dry age-related macular degeneration', 'glaucoma', 'mild nonproliferative retinopathy']
+class_labels = ['cataract', 'normal fundus', 'pathological myopia', 'moderate non proliferative retinopathy', 
+                'dry age-related macular degeneration', 'glaucoma', 'mild nonproliferative retinopathy']
 
 # Model path and Google Drive URL
-model_path = os.getenv("MODEL_PATH", "Trained model final.h5")
-model_url = os.getenv("MODEL_URL", "https://drive.google.com/uc?id=1ZqfCi9Mi8ACxI3Gnkgdr6IJOn4LsaYgf")
+model_path = os.getenv("MODEL_PATH", "model_dynamic_quantized.tflite")
+model_url = os.getenv("MODEL_URL", "https://drive.google.com/uc?id=1XwDeaiq05C1BcnYDTIEskKNQQJmsmJyA")
 
 # Ensure the output directory exists
 os.makedirs(os.path.dirname(model_path) or '.', exist_ok=True)
@@ -35,17 +39,20 @@ if not os.path.exists(model_path):
         logger.error(f"Failed to download model: {str(e)}")
         raise
 
-# Load the pre-trained model
+# Load the TensorFlow Lite model
 try:
-    model = load_model(model_path)
-    logger.info("Model loaded successfully")
+    interpreter = tflite(model_path=model_path)
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    logger.info("TensorFlow Lite model loaded successfully")
 except Exception as e:
     logger.error(f"Failed to load model: {str(e)}")
     raise
 
 def preprocess_image(image_file, target_size=(128, 128)):
     """
-    Preprocess an uploaded image for the VGG with ResNet model.
+    Preprocess an uploaded image for the TFLite model.
     
     Args:
         image_file: Uploaded image file
@@ -61,6 +68,7 @@ def preprocess_image(image_file, target_size=(128, 128)):
         img = cv2.resize(img, target_size)  # Resize to model input size
         img = img_to_array(img) / 255.0  # Normalize to [0, 1]
         img = np.expand_dims(img, axis=0)  # Add batch dimension
+        img = img.astype(np.float32)  # Ensure float32 for dynamic quantization
         return img
     except Exception as e:
         logger.error(f"Image preprocessing error: {str(e)}")
@@ -83,7 +91,10 @@ def predict():
         image_file = request.files['image']
         processed_image = preprocess_image(image_file)
         
-        predictions = model.predict(processed_image)[0]
+        # Run inference with TensorFlow Lite
+        interpreter.set_tensor(input_details[0]['index'], processed_image)
+        interpreter.invoke()
+        predictions = interpreter.get_tensor(output_details[0]['index'])[0]
         predicted_class_idx = np.argmax(predictions)
         predicted_class = class_labels[predicted_class_idx]
         
